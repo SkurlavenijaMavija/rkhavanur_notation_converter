@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>簡易版ラテン文字転写からラテン文字転写への変換器</title>
+    <script>
+        const converter = (input) => input.replace(/d\-/g, "\u{0111}").replace(/g`/g, "\u{0123}").replace(/n,/g, "\u{014B}").replace(/h\^/g, "\u{0266}").replace(/\./g, "\u{0325}").replace(/v/g, "\u{032E}").replace(/_/g, "\u{0331}").replace(/\*/g, "\u{00B7}").replace(/a\-/g, "\u{0101}").replace(/o\-/g, "\u{014D}").replace(/u\-/g, "\u{016B}").replace(/y\-/g, "\u{0233}").replace(/e/g, "\u{0259}").replace(/\+/g, "\u{031F}").replace(/N/g, "\u{207F}");
+        /*
+        中枢子音: d- := đ / g` := ģ
+        非中枢子音: ŋ := n, / h^ := ɦ
+        子音階梯: ̥  := . / ̮  := v / ̱  := _ / · := *
+        
+        中枢母音: (macron) := -
+        非中枢母音: e := ə
+        母音階梯: ̟  := + / ⁿ := N
+        */
+    </script>
+</head>
+
+<body style="font-family: Arial, Helvetica, sans-serif;">
+    <textarea id="in" spellcheck="false" rows="10" cols="80" style="font-family: Arial, Helvetica, sans-serif;"
+        onkeyup="document.getElementById('out').value = converter(document.getElementById('in').value)"></textarea><br>
+    <textarea readonly id="out" spellcheck="false" rows="10" cols="80" style="font-family: Arial, Helvetica, sans-serif;"></textarea><br>
+
+上のテキストボックスに簡易版ラテン文字転写で螺語を書くと下のテキストボックスにラテン文字転写が生成されます。例えば "abo-g`uda-d-duda-d- bvo-+n n,o-+=ha+u+nru+g`v=g`v b.*o-Nd-.*oNd.*q.*o-Nd.*uNb.*b.*oN" と入力すると "abōģudāđdudāđ b̮ō̟n ŋō̟=ha̟u̟nru̟ģ̮=ģ̮ b̥·ōⁿđ̥·oⁿd̥·q̥·ōⁿd̥·uⁿb̥·b̥·oⁿ" と変換されます。
+</body>
+
