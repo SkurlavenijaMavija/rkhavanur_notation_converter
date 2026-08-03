@@ -1,0 +1,851 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>万能変換器</title>
+    <style>
+      body {
+        margin: 1rem;
+        font-family:
+          "Charis SIL", "Andika", "Noto Sans", "DejaVu Sans", sans-serif;
+      }
+
+      .field {
+        margin-bottom: 1rem;
+      }
+
+      label,
+      select {
+        display: block;
+        margin-bottom: 0.35rem;
+      }
+
+      .checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        margin: 0.45rem 0;
+      }
+
+      textarea {
+        box-sizing: border-box;
+        width: min(100%, 80ch);
+        min-height: 6rem;
+        font:
+          1rem/1.5 "Charis SIL",
+          "Andika",
+          "Noto Sans",
+          "DejaVu Sans",
+          sans-serif;
+      }
+
+      #message {
+        width: min(100%, 80ch);
+        margin-top: 0.35rem;
+        color: #b00020;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section class="field">
+        <label for="input-format">入力形式</label>
+        <select id="input-format">
+          <option value="ascii">ASCII（表音）</option>
+          <option value="ascii-skeleton">ASCII（階梯分離）</option>
+          <option value="ipa">IPA</option>
+          <option value="human">人道</option>
+        </select>
+        <textarea
+          id="input-text"
+          rows="5"
+          cols="80"
+          spellcheck="false"
+          aria-label="変換するテキスト"
+        ></textarea>
+      </section>
+
+      <section class="field">
+        <label for="output-format">出力形式</label>
+        <select id="output-format">
+          <option value="ascii">ASCII（表音）</option>
+          <option value="ascii-skeleton">ASCII（階梯分離）</option>
+          <option value="ipa" >IPA</option>
+          <option value="human" selected>人道</option>
+        </select>
+        <label class="checkbox-label" for="hide-foreign-markers">
+          <input id="hide-foreign-markers" type="checkbox" />
+          外来語マーカー { } を隠す
+        </label>
+        <textarea
+          id="output-text"
+          rows="5"
+          cols="80"
+          readonly
+          spellcheck="false"
+          aria-label="変換結果"
+          aria-describedby="message"
+        ></textarea>
+        <p id="message" role="status" aria-live="polite" hidden></p>
+      </section>
+      <p>現世で用いられる古典螺語の転写方式4種を相互に変換するツールです。それぞれの方式の詳細についてはいつか書くのでとりあえず以下の例を参照してください。
+	  <ul>
+		<li>ASCII（表音） → RQ:v=nu:</li>
+		<li>ASCII（階梯分離） → (3-4)61:1=n3:</li>
+		<li>IPA → ʁɑːβ=nʊː</li>
+		<li>人道 → q̱āḇ=nū</li>
+	  </ul>
+      外来語とした扱いたい（螺語の音韻配列論的制約に縛られたくない）範囲は { / } で囲んでください。出力方式にASCII（階梯分離）を選択した場合、入力から特定できない階梯は ? で表します。
+      </p>
+    </main>
+
+    <script>
+      (() => {
+        // ============================================================
+        // 1. 共通IRで使う階梯状態
+        // ============================================================
+        var unknownGrade = () => ({
+          kind: "unknown",
+        });
+        var knownGrade = (value) => ({
+          kind: "known",
+          value,
+        });
+
+        // ============================================================
+        // 2. 共通表と、各入力形式の最長一致字句表
+        // ============================================================
+        var VOWEL_BASE_TABLE = {
+          1: {
+            skeleton: { short: "1.", long: "1:" },
+            human: { short: "a", long: "ā" },
+          },
+          2: {
+            skeleton: { short: "2.", long: "2:" },
+            human: { short: "o", long: "ō" },
+          },
+          3: {
+            skeleton: { short: "3.", long: "3:" },
+            human: { short: "u", long: "ū" },
+          },
+          4: {
+            skeleton: { short: "4.", long: "4:" },
+            human: { short: "y", long: "ȳ" },
+          },
+        };
+        var ASCII_VOWEL_TABLE = {
+          1: {
+            1: { short: "a", long: "a:" },
+            2: { short: "e", long: "e:" },
+            3: { short: "i", long: "i:" },
+            4: { short: "y", long: "y:" },
+          },
+          2: {
+            1: { short: "a~", long: "a^" },
+            2: { short: "e~", long: "e^" },
+            3: { short: "i~", long: "i^" },
+            4: { short: "y~", long: "y^" },
+          },
+          3: {
+            1: { short: "Q", long: "Q:" },
+            2: { short: "o", long: "o:" },
+            3: { short: "u", long: "u:" },
+            4: { short: "W", long: "W:" },
+          },
+          4: {
+            1: { short: "Q~", long: "Q^" },
+            2: { short: "o~", long: "o^" },
+            3: { short: "u~", long: "u^" },
+            4: { short: "W~", long: "W^" },
+          },
+        };
+        var withLength = (short) => ({
+          short,
+          long: `${short}ː`,
+        });
+        var IPA_VOWEL_TABLE = {
+          1: {
+            1: withLength("æ"),
+            2: withLength("e̞"),
+            3: withLength("ɪ"),
+            4: withLength("y"),
+          },
+          2: {
+            1: withLength("æ̃"),
+            2: withLength("ẽ̞"),
+            3: withLength("ɪ̃"),
+            4: withLength("ỹ"),
+          },
+          3: {
+            1: withLength("ɑ"),
+            2: withLength("o̞"),
+            3: withLength("ʊ"),
+            4: withLength("ɯ"),
+          },
+          4: {
+            1: withLength("ɑ̃"),
+            2: withLength("õ̞"),
+            3: withLength("ʊ̃"),
+            4: withLength("ɯ̃"),
+          },
+        };
+        var HUMAN_VOWEL_GRADE_SUFFIX = {
+          1: "̟",
+          // U+031F COMBINING PLUS SIGN BELOW
+          2: "̟ⁿ",
+          // U+031F + U+207F; NFKCしてはならない
+          3: "",
+          4: "ⁿ",
+        };
+        var CONSONANT_BASE_TABLE = {
+          1: { skeleton: "1", human: "b" },
+          2: { skeleton: "2", human: "d" },
+          3: { skeleton: "3", human: "đ" },
+          4: { skeleton: "4", human: "ģ" },
+          5: { skeleton: "5", human: "g" },
+          6: { skeleton: "6", human: "q" },
+        };
+        var ASCII_CONSONANT_TABLE = {
+          1: ["p", "t", "T", "c", "k", "K"],
+          2: ["b", "d", "D", "J", "g", "G"],
+          3: ["f", "s", "S", "C", "x", "X"],
+          4: ["v", "z", "Z", "I", "V", "R"],
+          5: ["p^", "t^", "T^", "c^", "k^", "K^"],
+          6: ["b^", "d^", "D^", "J^", "g^", "G^"],
+        };
+        var IPA_CONSONANT_TABLE = {
+          1: ["p", "t", "ʈ", "c", "k", "q"],
+          2: ["b", "d", "ɖ", "ɟ", "ɡ", "ɢ"],
+          3: ["ɸ", "s", "ʂ", "ç", "x", "χ"],
+          4: ["β", "z", "ʐ", "ʝ", "ɣ", "ʁ"],
+          5: ["p͡ɸ", "t͡s", "ʈ͡ʂ", "c͡ç", "k͡x", "q͡χ"],
+          6: ["b͡β", "d͡z", "ɖ͡ʐ", "ɟ͡ʝ", "ɡ͡ɣ", "ɢ͡ʁ"],
+        };
+        var HUMAN_CONSONANT_GRADE_SUFFIX = {
+          1: "̥",
+          // U+0325 COMBINING RING BELOW
+          2: "",
+          3: "̮",
+          // U+032E COMBINING BREVE BELOW
+          4: "̱",
+          // U+0331 COMBINING MACRON BELOW
+          5: "̥·",
+          6: "·",
+        };
+        var FIXED_TABLE = {
+          ə: { ascii: "E", skeleton: "E", ipa: "ə", human: "ə" },
+          m: { ascii: "m", skeleton: "m", ipa: "m", human: "m" },
+          n: { ascii: "n", skeleton: "n", ipa: "n", human: "n" },
+          ŋ: { ascii: "N", skeleton: "N", ipa: "ŋ", human: "ŋ" },
+          r: { ascii: "r", skeleton: "r", ipa: "r", human: "r" },
+          l: { ascii: "L", skeleton: "L", ipa: "l", human: "l" },
+          h: { ascii: "h", skeleton: "h", ipa: "h", human: "h" },
+          ɦ: { ascii: "H", skeleton: "H", ipa: "ɦ", human: "ɦ" },
+          ʔ: { ascii: "q", skeleton: "q", ipa: "ʔ", human: "'" },
+          j: { ascii: "j", skeleton: "j", ipa: "j", human: "j" },
+          ʋ: { ascii: "w", skeleton: "w", ipa: "ʋ", human: "w" },
+        };
+        var VOWEL_GRADES = [1, 2, 3, 4];
+        var CONSONANT_GRADES = [1, 2, 3, 4, 5, 6];
+        var VOWEL_HEIGHTS = [1, 2, 3, 4];
+        var CONSONANT_PLACES = [1, 2, 3, 4, 5, 6];
+        var fixedEntries = (format) =>
+          Object.entries(FIXED_TABLE).map(([phoneme, forms]) => ({
+            token:
+              format === "ascii-skeleton"
+                ? forms.skeleton
+                : format === "ascii"
+                  ? forms.ascii
+                  : forms[format],
+            segment: { kind: "fixed", phoneme },
+          }));
+        var vowelEntries = (format) => {
+          const entries = [];
+          for (const height of VOWEL_HEIGHTS) {
+            for (const long of [false, true]) {
+              if (format === "ascii-skeleton") {
+                entries.push({
+                  token:
+                    VOWEL_BASE_TABLE[height].skeleton[long ? "long" : "short"],
+                  segment: { kind: "central-vowel", height, long },
+                });
+                continue;
+              }
+              for (const vowelGrade of VOWEL_GRADES) {
+                const token =
+                  format === "ascii"
+                    ? ASCII_VOWEL_TABLE[vowelGrade][height][
+                        long ? "long" : "short"
+                      ]
+                    : format === "ipa"
+                      ? IPA_VOWEL_TABLE[vowelGrade][height][
+                          long ? "long" : "short"
+                        ]
+                      : `${VOWEL_BASE_TABLE[height].human[long ? "long" : "short"]}${HUMAN_VOWEL_GRADE_SUFFIX[vowelGrade]}`;
+                entries.push({
+                  token: token.normalize("NFC"),
+                  segment: { kind: "central-vowel", height, long },
+                  vowelGrade,
+                });
+              }
+            }
+          }
+          return entries;
+        };
+        var consonantEntries = (format) => {
+          const entries = [];
+          for (const place of CONSONANT_PLACES) {
+            if (format === "ascii-skeleton") {
+              entries.push({
+                token: CONSONANT_BASE_TABLE[place].skeleton,
+                segment: { kind: "central-consonant", place },
+              });
+              continue;
+            }
+            for (const consonantGrade of CONSONANT_GRADES) {
+              const token =
+                format === "ascii"
+                  ? ASCII_CONSONANT_TABLE[consonantGrade][place - 1]
+                  : format === "ipa"
+                    ? IPA_CONSONANT_TABLE[consonantGrade][place - 1]
+                    : `${CONSONANT_BASE_TABLE[place].human}${HUMAN_CONSONANT_GRADE_SUFFIX[consonantGrade]}`;
+              if (token === void 0) {
+                throw new Error(
+                  `missing consonant table entry: ${consonantGrade}/${place}`,
+                );
+              }
+              entries.push({
+                token: token.normalize("NFC"),
+                segment: { kind: "central-consonant", place },
+                consonantGrade,
+              });
+            }
+          }
+          return entries;
+        };
+        var makeLexicon = (format) => {
+          const boundary = {
+            token: "=",
+            segment: { kind: "boundary" },
+          };
+          return [
+            ...vowelEntries(format),
+            ...consonantEntries(format),
+            ...fixedEntries(format),
+            boundary,
+          ].sort((a, b) => b.token.length - a.token.length);
+        };
+        var LEXICONS = {
+          ascii: makeLexicon("ascii"),
+          "ascii-skeleton": makeLexicon("ascii-skeleton"),
+          ipa: makeLexicon("ipa"),
+          human: makeLexicon("human"),
+        };
+
+        // ============================================================
+        // 3. 階梯情報が語形を決定するのに十分か判定
+        // ============================================================
+        var analyzeGradeSufficiency = (domain) => {
+          const requiresVowelGrade = domain.parts.some(
+            (part) => part.kind === "central-vowel",
+          );
+          const requiresConsonantGrade = domain.parts.some(
+            (part) => part.kind === "central-consonant",
+          );
+          const missing = [];
+          const conflicts = [];
+          if (requiresVowelGrade && domain.vowelGrade.kind === "unknown") {
+            missing.push("vowel");
+          }
+          if (
+            requiresConsonantGrade &&
+            domain.consonantGrade.kind === "unknown"
+          ) {
+            missing.push("consonant");
+          }
+          if (domain.vowelGrade.kind === "conflict") conflicts.push("vowel");
+          if (domain.consonantGrade.kind === "conflict")
+            conflicts.push("consonant");
+          return {
+            determinate: missing.length === 0 && conflicts.length === 0,
+            requiresVowelGrade,
+            requiresConsonantGrade,
+            missing,
+            conflicts,
+          };
+        };
+
+        // ============================================================
+        // 4. 共通IRから4形式へ出力
+        // ============================================================
+        var serializeGrade = (state) => {
+          if (state.kind === "known") return String(state.value);
+          if (state.kind === "unknown") return "?";
+          throw new Error("conflicting grades cannot be serialized as ?");
+        };
+        var encodeFixed = (phoneme, format) => {
+          const row = FIXED_TABLE[phoneme];
+          if (format === "ascii-skeleton") return row.skeleton;
+          if (format === "ascii") return row.ascii;
+          return row[format];
+        };
+        var encodeNativeSegment = (segment, domain, format) => {
+          if (segment.kind === "boundary") return "=";
+          if (segment.kind === "fixed")
+            return encodeFixed(segment.phoneme, format);
+          if (segment.kind === "central-vowel") {
+            const length = segment.long ? "long" : "short";
+            if (format === "ascii-skeleton") {
+              return VOWEL_BASE_TABLE[segment.height].skeleton[length];
+            }
+            if (domain.vowelGrade.kind !== "known") {
+              throw new Error("vowel grade was not checked before encoding");
+            }
+            if (format === "ascii") {
+              return ASCII_VOWEL_TABLE[domain.vowelGrade.value][segment.height][
+                length
+              ];
+            }
+            if (format === "ipa") {
+              return IPA_VOWEL_TABLE[domain.vowelGrade.value][segment.height][
+                length
+              ];
+            }
+            return `${VOWEL_BASE_TABLE[segment.height].human[length]}${HUMAN_VOWEL_GRADE_SUFFIX[domain.vowelGrade.value]}`.normalize(
+              "NFC",
+            );
+          }
+          if (format === "ascii-skeleton") {
+            return CONSONANT_BASE_TABLE[segment.place].skeleton;
+          }
+          if (domain.consonantGrade.kind !== "known") {
+            throw new Error("consonant grade was not checked before encoding");
+          }
+          if (format === "ascii") {
+            return (
+              ASCII_CONSONANT_TABLE[domain.consonantGrade.value][
+                segment.place - 1
+              ] ?? ""
+            );
+          }
+          if (format === "ipa") {
+            return (
+              IPA_CONSONANT_TABLE[domain.consonantGrade.value][
+                segment.place - 1
+              ] ?? ""
+            );
+          }
+          return `${CONSONANT_BASE_TABLE[segment.place].human}${HUMAN_CONSONANT_GRADE_SUFFIX[domain.consonantGrade.value]}`.normalize(
+            "NFC",
+          );
+        };
+        var shouldWriteHeader = (domain, mode) => {
+          if (mode === "always") return true;
+          if (mode === "never") return false;
+          return (
+            domain.parts.some(
+              (part) =>
+                part.kind === "central-vowel" ||
+                part.kind === "central-consonant",
+            ) ||
+            domain.vowelGrade.kind === "known" ||
+            domain.consonantGrade.kind === "known"
+          );
+        };
+        var validateDomain = (domain, domainIndex, format) => {
+          const diagnostics = [];
+          const analysis = analyzeGradeSufficiency(domain);
+          if (analysis.conflicts.includes("vowel")) {
+            diagnostics.push({
+              severity: "error",
+              code: "UNREPRESENTABLE_CONFLICT",
+              message: "同一語内に複数階梯の母音が出現。",
+              domainIndex,
+            });
+          }
+          if (analysis.conflicts.includes("consonant")) {
+            diagnostics.push({
+              severity: "error",
+              code: "UNREPRESENTABLE_CONFLICT",
+              message: "同一語内に複数階梯の子音が出現。",
+              domainIndex,
+            });
+          }
+          if (format !== "ascii-skeleton") {
+            if (analysis.missing.includes("vowel")) {
+              diagnostics.push({
+                severity: "error",
+                code: "MISSING_VOWEL_GRADE",
+                message:
+                  "母音階梯が不明。",
+                domainIndex,
+              });
+            }
+            if (analysis.missing.includes("consonant")) {
+              diagnostics.push({
+                severity: "error",
+                code: "MISSING_CONSONANT_GRADE",
+                message:
+                  "子音階梯が不明。",
+                domainIndex,
+              });
+            }
+          }
+          for (const part of domain.parts) {
+            if (part.kind === "foreign" && /[{}]/u.test(part.raw)) {
+              diagnostics.push({
+                severity: "error",
+                code: "INVALID_FOREIGN_CONTENT",
+                message: "外来語形に { / }を含めないこと。",
+                domainIndex,
+                raw: part.raw,
+              });
+            }
+          }
+          return diagnostics;
+        };
+        var encodeDomainPart = (part, domain, format, foreignBraces) => {
+          if (part.kind !== "foreign") {
+            return encodeNativeSegment(part, domain, format);
+          }
+          return foreignBraces === "preserve" ? `{${part.raw}}` : part.raw;
+        };
+        var encode = (document2, format, options = {}) => {
+          const diagnostics = [];
+          const foreignBraces = options.foreignBraces ?? "preserve";
+          const gradeHeader = options.gradeHeader ?? "always";
+          let domainIndex = 0;
+          for (const part of document2.parts) {
+            if (part.kind !== "domain") continue;
+            diagnostics.push(...validateDomain(part, domainIndex, format));
+            domainIndex += 1;
+          }
+          if (
+            diagnostics.some((diagnostic) => diagnostic.severity === "error")
+          ) {
+            return { ok: false, text: null, diagnostics };
+          }
+          const output2 = [];
+          for (const part of document2.parts) {
+            if (part.kind === "literal") {
+              output2.push(part.raw);
+              continue;
+            }
+            if (
+              format === "ascii-skeleton" &&
+              shouldWriteHeader(part, gradeHeader)
+            ) {
+              output2.push(
+                `(${serializeGrade(part.vowelGrade)}-${serializeGrade(part.consonantGrade)})`,
+              );
+            }
+            for (const domainPart of part.parts) {
+              output2.push(
+                encodeDomainPart(domainPart, part, format, foreignBraces),
+              );
+            }
+          }
+          return { ok: true, text: output2.join(""), diagnostics };
+        };
+
+        // ============================================================
+        // 5. 4形式から共通IRへ解析
+        // ============================================================
+        var isVowelGrade = (value) => value >= 1 && value <= 4;
+        var isConsonantGrade = (value) => value >= 1 && value <= 6;
+        var parseVowelHeaderValue = (raw) => {
+          if (raw === "?") return unknownGrade();
+          const value = Number(raw);
+          if (!isVowelGrade(value))
+            throw new Error(`invalid vowel grade: ${raw}`);
+          return knownGrade(value);
+        };
+        var parseConsonantHeaderValue = (raw) => {
+          if (raw === "?") return unknownGrade();
+          const value = Number(raw);
+          if (!isConsonantGrade(value)) {
+            throw new Error(`invalid consonant grade: ${raw}`);
+          }
+          return knownGrade(value);
+        };
+        var mergeEvidence = (current, evidence) => {
+          if (current.kind === "unknown") return knownGrade(evidence);
+          if (current.kind === "known") {
+            return current.value === evidence
+              ? current
+              : { kind: "conflict", values: [current.value, evidence].sort() };
+          }
+          return current.values.includes(evidence)
+            ? current
+            : {
+                kind: "conflict",
+                values: [...current.values, evidence].sort(),
+              };
+        };
+        var splitForeign = (input2, diagnostics) => {
+          const units = [];
+          let textStart = 0;
+          let index = 0;
+          while (index < input2.length) {
+            const character = input2[index];
+            if (character === "}") {
+              diagnostics.push({
+                severity: "error",
+                code: "UNRECOGNIZED_INPUT",
+                message:
+                  "裸の } を確認。",
+                raw: "}",
+              });
+              index += 1;
+              continue;
+            }
+            if (character !== "{") {
+              index += 1;
+              continue;
+            }
+            if (textStart < index) {
+              units.push({ kind: "text", raw: input2.slice(textStart, index) });
+            }
+            const close = input2.indexOf("}", index + 1);
+            if (close < 0) {
+              diagnostics.push({
+                severity: "error",
+                code: "UNCLOSED_FOREIGN",
+                message: "裸の { を確認。",
+                raw: input2.slice(index),
+              });
+              units.push({ kind: "text", raw: input2.slice(index) });
+              return units;
+            }
+            const raw = input2.slice(index + 1, close);
+            if (raw.includes("{")) {
+              diagnostics.push({
+                severity: "error",
+                code: "NESTED_FOREIGN",
+                message: "{…} は入れ子にしないこと。",
+                raw,
+              });
+            }
+            units.push({ kind: "foreign", raw });
+            index = close + 1;
+            textStart = index;
+          }
+          if (textStart < input2.length) {
+            units.push({ kind: "text", raw: input2.slice(textStart) });
+          }
+          return units;
+        };
+        var isSafeLiteral = (character) =>
+          /[\p{White_Space}\p{Punctuation}\p{Symbol}]/u.test(character);
+        var matchHeader = (text, index) => {
+          const match = /^\(([1-4?])-([1-6?])\)/u.exec(text.slice(index));
+          if (match === null) return void 0;
+          const vowelRaw = match[1];
+          const consonantRaw = match[2];
+          if (vowelRaw === void 0 || consonantRaw === void 0) return void 0;
+          return {
+            raw: match[0],
+            vowelGrade: parseVowelHeaderValue(vowelRaw),
+            consonantGrade: parseConsonantHeaderValue(consonantRaw),
+          };
+        };
+        var matchLexicon = (text, index, lexicon) =>
+          lexicon.find((entry) => text.startsWith(entry.token, index));
+        var parse = (input2, format) => {
+          const diagnostics = [];
+          const units = splitForeign(input2, diagnostics);
+          const parts = [];
+          const lexicon = LEXICONS[format];
+          let current;
+          const newUnknownDomain = () => ({
+            parts: [],
+            vowelGrade: unknownGrade(),
+            consonantGrade: unknownGrade(),
+          });
+          const ensureDomain = () => {
+            current ?? (current = newUnknownDomain());
+            return current;
+          };
+          const flushDomain = () => {
+            if (current === void 0) return;
+            if (current.parts.length > 0) {
+              parts.push({
+                kind: "domain",
+                parts: current.parts,
+                vowelGrade: current.vowelGrade,
+                consonantGrade: current.consonantGrade,
+              });
+            }
+            current = void 0;
+          };
+          const appendLiteral = (raw) => {
+            flushDomain();
+            const previous = parts.at(-1);
+            if (previous?.kind === "literal") {
+              parts[parts.length - 1] = {
+                kind: "literal",
+                raw: previous.raw + raw,
+              };
+            } else {
+              parts.push({ kind: "literal", raw });
+            }
+          };
+          for (const unit of units) {
+            if (unit.kind === "foreign") {
+              ensureDomain().parts.push({ kind: "foreign", raw: unit.raw });
+              continue;
+            }
+            const text = unit.raw.normalize("NFC");
+            let index = 0;
+            while (index < text.length) {
+              if (format === "ascii-skeleton") {
+                const header = matchHeader(text, index);
+                if (header !== void 0) {
+                  flushDomain();
+                  current = {
+                    parts: [],
+                    vowelGrade: header.vowelGrade,
+                    consonantGrade: header.consonantGrade,
+                  };
+                  index += header.raw.length;
+                  continue;
+                }
+              }
+              const entry = matchLexicon(text, index, lexicon);
+              if (entry !== void 0) {
+                const domain = ensureDomain();
+                domain.parts.push(entry.segment);
+                if (entry.vowelGrade !== void 0) {
+                  domain.vowelGrade = mergeEvidence(
+                    domain.vowelGrade,
+                    entry.vowelGrade,
+                  );
+                }
+                if (entry.consonantGrade !== void 0) {
+                  domain.consonantGrade = mergeEvidence(
+                    domain.consonantGrade,
+                    entry.consonantGrade,
+                  );
+                }
+                index += entry.token.length;
+                continue;
+              }
+              const codePoint = text.codePointAt(index);
+              if (codePoint === void 0) break;
+              const character = String.fromCodePoint(codePoint);
+              if (
+                !isSafeLiteral(character) ||
+                character === "{" ||
+                character === "}"
+              ) {
+                diagnostics.push({
+                  severity: "error",
+                  code: "UNRECOGNIZED_INPUT",
+                  message: `不適切な記号「${character}」を発見。`,
+                  raw: character,
+                });
+              }
+              appendLiteral(character);
+              index += character.length;
+            }
+          }
+          flushDomain();
+          let domainIndex = 0;
+          for (const part of parts) {
+            if (part.kind !== "domain") continue;
+            if (part.vowelGrade.kind === "conflict") {
+              diagnostics.push({
+                severity: "error",
+                code: "GRADE_CONFLICT",
+                message: `同一語中に複数の母音階梯 (${part.vowelGrade.values.join(", ")}) を検出。`,
+                domainIndex,
+              });
+            }
+            if (part.consonantGrade.kind === "conflict") {
+              diagnostics.push({
+                severity: "error",
+                code: "GRADE_CONFLICT",
+                message: `同一語中に複数の子音階梯 (${part.consonantGrade.values.join(", ")}) を検出。`,
+                domainIndex,
+              });
+            }
+            domainIndex += 1;
+          }
+          const document2 = {
+            kind: "document",
+            sourceFormat: format,
+            parts,
+          };
+          return {
+            ok: diagnostics.every(
+              (diagnostic) => diagnostic.severity !== "error",
+            ),
+            document: document2,
+            diagnostics,
+          };
+        };
+
+        // ============================================================
+        // 6. 解析器と出力器を結ぶワンショット変換関数
+        // ============================================================
+        var transcode = (input2, from, to, options = {}) => {
+          const parseResult = parse(input2, from);
+          if (!parseResult.ok) {
+            return {
+              ok: false,
+              text: null,
+              diagnostics: parseResult.diagnostics,
+              parseResult,
+            };
+          }
+          const encoded = encode(parseResult.document, to, options);
+          const diagnostics = [
+            ...parseResult.diagnostics,
+            ...encoded.diagnostics,
+          ];
+          return { ...encoded, diagnostics, parseResult };
+        };
+
+        // ============================================================
+        // 7. HTMLの入力欄・選択欄と変換処理を接続
+        // ============================================================
+        var inputFormat = document.getElementById("input-format");
+        var outputFormat = document.getElementById("output-format");
+        var input = document.getElementById("input-text");
+        var output = document.getElementById("output-text");
+        var hideForeignMarkers = document.getElementById(
+          "hide-foreign-markers",
+        );
+        var message = document.getElementById("message");
+        var convert = () => {
+          const result = transcode(
+            input.value,
+            inputFormat.value,
+            outputFormat.value,
+            {
+              foreignBraces: hideForeignMarkers.checked ? "strip" : "preserve",
+            },
+          );
+          if (result.ok) {
+            output.value = result.text ?? "";
+            message.textContent = "";
+            message.hidden = true;
+            return;
+          }
+          output.value = "";
+          message.textContent = result.diagnostics
+            .map((diagnostic) => diagnostic.message)
+            .join("\n");
+          message.hidden = false;
+        };
+        input.addEventListener("input", convert);
+        inputFormat.addEventListener("change", convert);
+        outputFormat.addEventListener("change", convert);
+        hideForeignMarkers.addEventListener("change", convert);
+        convert();
+      })();
+    </script>
+  </body>
+</html>
